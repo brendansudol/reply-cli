@@ -262,27 +262,27 @@ def count_consecutive_incoming(conn: sqlite3.Connection, chat_id: int, last_outg
             break
     return streak
 
-def compute_score(last_incoming_dt, last_outgoing_dt, last_message_dt, last_incoming_text, consecutive_incoming) -> float:
-    now = now_utc()
+def compute_score(last_incoming_dt, last_outgoing_dt, last_message_dt, consecutive_incoming) -> float:
+    """Simplified scoring based solely on:
+    - needs-reply gating (you are not the last responder; reactions count as replies),
+    - urgency (recency of last incoming),
+    - consecutive incoming streak.
+
+    If you have replied since the last incoming (including with a reaction), the score is 0.
+    """
+    # If there is no incoming at all, nothing to prioritize.
     if last_incoming_dt is None:
-        urgency = 0.0
-    else:
-        hours = (now - last_incoming_dt).total_seconds() / 3600.0
-        urgency = 1.0 / (1.0 + (hours / 8.0))
-    replied_after = bool(last_incoming_dt and last_outgoing_dt and last_outgoing_dt > last_incoming_dt)
-    base = 0.15 if replied_after else 0.65
-    streak = min(consecutive_incoming, 5) / 5.0
-    expects = 0.0
-    txt = (last_incoming_text or "").strip().lower()
-    if txt:
-        qm = txt.count("?")
-        expects += min(qm, 2) * 0.25
-        if any(k in txt for k in ["can you","could you","do you","are you","when","what time","free","available","ok?"]):
-            expects += 0.25
-        if len(txt) < 12 and any(k in txt for k in ["ping","?","u there","you there","yo","hey"]):
-            expects += 0.1
-        expects = min(expects, 0.8)
-    score = base * urgency + 0.25 * streak + 0.35 * expects
+        return 0.0
+    # If we've replied after the last incoming (reaction included), do not prioritize.
+    if last_outgoing_dt is not None and last_outgoing_dt >= last_incoming_dt:
+        return 0.0
+    # Urgency: newer incoming → higher. Half-life-ish over ~8 hours.
+    now = now_utc()
+    hours = max(0.0, (now - last_incoming_dt).total_seconds() / 3600.0)
+    urgency = 1.0 / (1.0 + (hours / 8.0))
+    # Streak: normalize 0..1, cap at 5 consecutive.
+    streak = min(max(0, consecutive_incoming), 5) / 5.0
+    score = 0.75 * urgency + 0.25 * streak
     return round(score, 4)
 
 def build_threads(conn: sqlite3.Connection, within_days: int, include_groups: bool) -> List[ThreadInfo]:
@@ -305,7 +305,7 @@ def build_threads(conn: sqlite3.Connection, within_days: int, include_groups: bo
             continue
         needs = bool(last_in_dt and (last_out_dt is None or last_in_dt > last_out_dt))
         streak = count_consecutive_incoming(conn, chat_id, row["last_outgoing"])
-        score = compute_score(last_in_dt, last_out_dt, last_msg_dt, last_in_text, streak)
+        score = compute_score(last_in_dt, last_out_dt, last_msg_dt, streak)
         threads.append(ThreadInfo(
             chat_id=chat_id,
             guid=row["guid"],

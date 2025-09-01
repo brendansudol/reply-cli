@@ -27,7 +27,7 @@
 
 ## Features
 
-- **Prioritized triage** — finds threads where the latest message is incoming and you haven’t replied; weights recency, consecutive incoming streak, and “question/ask” cues to compute a score.
+- **Prioritized triage** — finds threads where the latest message is incoming and you haven’t replied (reactions count as replies); weights recency and consecutive incoming streak to compute a score.
 - **Interactive, one‑by‑one workflow** — step through threads with navigation, ignore/skip, reply, and LLM draft.
 - **Context view** — show the last _N_ messages (oldest → newest). Use `--no-truncate` to see full text.
 - **Reply from the CLI** — send via Messages (AppleScript) or copy to the clipboard, or do both.
@@ -50,11 +50,10 @@
   - last incoming text preview,
   - participants,
   - consecutive incoming streak since your last outgoing.
-- **Scoring heuristic** — combines:
+- **Scoring heuristic** — considers:
   - urgency (time since last incoming),
-  - whether you have replied after the last incoming,
   - consecutive incoming streak (capped at 5),
-  - ask/question cues in the last incoming (e.g., “can you”, “what time”, “?”, “free”, etc.).
+  - scores only if you have not replied since the last incoming (your reactions count as replies).
 - **Mark resolved (until next inbound)** — if a thread’s latest message doesn’t need a reply, press `z`. We save the latest incoming timestamp as a **resolved marker**. While no newer incoming exists, the thread stays hidden. If a **new incoming** arrives later, the thread returns to the triage list. Clear with `u` anytime.
 - **Sending** — replies are sent by telling the **Messages** app to `send "<text>" to chat id "<GUID>"` via AppleScript (`osascript`). **We do not write to the DB** to send.
 - **Contacts** — name resolution uses the Contacts app via AppleScript (optional).
