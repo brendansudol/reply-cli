@@ -508,7 +508,7 @@ def send_via_messages(chat_guid: str, text: str, timeout: int = 20) -> Tuple[boo
     end run
     """
     try:
-        res = subprocess.run(["osascript", "-e", osa, chat_guid, text], capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid, text], capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         return False, "osascript not found (must run on macOS)."
     except subprocess.TimeoutExpired:
@@ -541,7 +541,7 @@ def tapback_via_messages(chat_guid: str, message_guid: str, emoji: str, timeout:
     end run
     """
     try:
-        res = subprocess.run(["osascript", "-e", osa, chat_guid, message_guid, emoji], capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid, message_guid, emoji], capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         return False, "osascript not found (must run on macOS)."
     except subprocess.TimeoutExpired:
@@ -803,7 +803,7 @@ def open_in_messages(chat_guid: str) -> Tuple[bool, str]:
     end run
     """
     try:
-        res = subprocess.run(["osascript", "-e", osa, chat_guid], capture_output=True, text=True, timeout=15)
+        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid], capture_output=True, text=True, timeout=15)
     except Exception as e:
         return False, str(e)
     out = (res.stdout or "").strip()
