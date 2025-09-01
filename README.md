@@ -30,6 +30,7 @@
 - **Interactive, one‑by‑one workflow** — step through threads with navigation, ignore/skip, reply, and LLM draft.
 - **Context view** — show the last _N_ messages (oldest → newest). Use `--no-truncate` to see full text.
 - **Reply from the CLI** — send via Messages (AppleScript) or copy to the clipboard, or do both.
+- **Emoji tapbacks** — react to specific messages with any emoji; counts as a response.
 - **Mark resolved (until next inbound)** — press `z` to hide a thread that doesn’t need a reply; it will **re-appear automatically** when a new incoming message arrives. Use `u` to clear the marker.
 - **OpenAI draft (optional)** — send context + your notes to OpenAI to produce a short reply you can accept, edit, copy, or discard.
 - **Refresh without restarting** — press `R` to rebuild the list from the DB with current filters.
@@ -168,16 +169,18 @@ You’ll see one thread at a time:
 n  next           p  previous         j <#>  jump to item #
 s  skip (session) i  ignore Ndays     f      ignore forever
 z  mark resolved (until next inbound) u      unresolve (clear marker)
-r  reply (send/copy/both)            g      LLM draft (accept/edit/copy/both)
-a  alias name (persist)              o      open in Messages
-R  refresh threads from DB           c      clear ignore on this thread
-h  help                              q      quit (saves position & GUID; use --resume next time)
+r  reply (send/copy/both)            t      tapback reaction (emoji)
+g  LLM draft (accept/edit/copy/both) a      alias name (persist)
+o  open in Messages                  R      refresh threads from DB
+c  clear ignore on this thread       h      help
+q  quit (saves position & GUID; use --resume next time)
 ```
 
 Notes:
 
 - **Resolve `z`** — saves a _resolved marker_ at the latest incoming. The thread is hidden until someone sends another message; then it reappears automatically. Use `u` to clear.
 - **Reply `r`** — type your message. If you submit an empty line, your `$EDITOR` (defaults to `nano`) opens for multi‑line. Choose: `(s)end`, `(c)opy`, `(b)oth`, or cancel.
+- **Tapback `t`** — react to a specific message with an emoji. Counts as a response.
 - **Draft `g`** — add optional notes, then choose: `(a)ccept & send`, `(e)dit then send`, `(c)opy`, `(b)oth`, or `d`iscard.
 - **Alias `a`** — set a custom name for a participant handle (works in 1:1 and group chats). Aliases are immediate and persist.
 - **Refresh `R`** — rebuilds the list from the DB with your current filters; attempts to keep you on the same thread.
