@@ -8,23 +8,24 @@
 
 ## Table of contents
 
-- Features
-- How it works
-- Installation
-- Permissions (macOS)
-- Quick start
-- Command‑line options
-- Interactive mode
-- OpenAI draft replies (optional)
-- State file
-- Built‑in help from the CLI
-- FAQ / Troubleshooting
-- Security & privacy notes
-- Future ideas
-- License
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Installation](#installation)
+- [Permissions (macOS)](#permissions-macos)
+- [Quick start](#quick-start)
+- [Command-line options](#command-line-options)
+- [Interactive mode](#interactive-mode)
+- [OpenAI draft replies (optional)](#openai-draft-replies-optional)
+- [State file](#state-file)
+- [Built-in help from the CLI](#built-in-help-from-the-cli)
+- [FAQ / Troubleshooting](#faq--troubleshooting)
+- [Security & privacy notes](#security--privacy-notes)
+- [Future ideas](#future-ideas)
+- [License](#license)
 
 ---
 
+<a id="features"></a>
 ## Features
 
 - **Prioritized triage** — finds threads where the latest message is incoming and you haven’t replied (reactions count as replies); weights recency and consecutive incoming streak to compute a score.
@@ -43,6 +44,7 @@
 
 ---
 
+<a id="how-it-works"></a>
 ## How it works
 
 - **Read‑only DB scan** — opens `~/Library/Messages/chat.db` **read‑only** (SQLite URI `?mode=ro`) and computes per‑thread metadata:
@@ -61,6 +63,7 @@
 
 ---
 
+<a id="installation"></a>
 ## Installation
 
 1. Ensure you’re on macOS with Python 3.9+ available as `python3`.
@@ -74,6 +77,7 @@ No extra pip packages are required (uses only the standard library).
 
 ---
 
+<a id="permissions-macos"></a>
 ## Permissions (macOS)
 
 You’ll likely get prompts the first time you run certain features:
@@ -86,6 +90,7 @@ You’ll likely get prompts the first time you run certain features:
 
 ---
 
+<a id="quick-start"></a>
 ## Quick start
 
 ### List likely‑to‑reply threads with context and names
@@ -121,6 +126,7 @@ python3 reply.py --export ~/Desktop/needs_reply.csv
 
 ---
 
+<a id="command-line-options"></a>
 ## Command‑line options
 
 ```
@@ -148,6 +154,7 @@ Environment variables (optional):
 
 ---
 
+<a id="interactive-mode"></a>
 ## Interactive mode
 
 Start interactive mode:
@@ -186,6 +193,7 @@ Notes:
 
 ---
 
+<a id="openai-draft-replies-optional"></a>
 ## OpenAI draft replies (optional)
 
 ```bash
@@ -200,6 +208,7 @@ Then in interactive mode press `g` to generate a draft using the last few messag
 
 ---
 
+<a id="state-file"></a>
 ## State file
 
 Default path: `~/.reply_state.json` (change with `--state`). Contains:
@@ -217,6 +226,7 @@ You can safely delete the state file to reset ignores/aliases/resume position.
 
 ---
 
+<a id="built-in-help-from-the-cli"></a>
 ## Built‑in help from the CLI
 
 - Standard help: `python3 reply.py -h`
@@ -226,6 +236,7 @@ You can safely delete the state file to reset ignores/aliases/resume position.
 
 ---
 
+<a id="faq--troubleshooting"></a>
 ## FAQ / Troubleshooting
 
 **I see “Operation not permitted” or empty results.**  
@@ -253,6 +264,7 @@ This tool reads common columns from `chat.db`. If Apple changes the schema, quer
 
 ---
 
+<a id="security--privacy-notes"></a>
 ## Security & privacy notes
 
 - **Read‑only DB access:** the script never writes to `chat.db`.
@@ -262,6 +274,7 @@ This tool reads common columns from `chat.db`. If Apple changes the schema, quer
 
 ---
 
+<a id="future-ideas"></a>
 ## Future ideas
 
 - **Emoji tapbacks** — react to specific messages with common reactions (❤️ 👍 👎 😂 !! ?).
@@ -269,6 +282,7 @@ This tool reads common columns from `chat.db`. If Apple changes the schema, quer
 
 ---
 
+<a id="license"></a>
 ## License
 
 MIT
