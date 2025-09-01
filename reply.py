@@ -547,7 +547,7 @@ def tapback_via_messages(chat_guid: str, message_guid: str, emoji: str, timeout:
       tell application "System Events"
         if not (exists process "Messages") then error "Messages is not running"
         tell process "Messages"
-          keystroke "t" using {command down}
+          keystroke "t" using {{command down}}
           delay 0.05
           keystroke "{reaction_key}"
         end tell
