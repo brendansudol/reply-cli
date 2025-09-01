@@ -21,6 +21,8 @@ STATE_DEFAULT = os.path.expanduser("~/.reply_state.json")
 LEGACY_STATE = os.path.expanduser("~/.imreply_state.json")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
+COMMON_TAPBACKS = ["❤️", "👍", "👎", "😂", "!!", "?"]
+
 FULL_HELP = textwrap.dedent("""
     reply — interactive iMessage/SMS triage CLI for macOS
     =====================================================
@@ -73,7 +75,7 @@ FULL_HELP = textwrap.dedent("""
       n  next           p  previous         j <#>  jump to item #
       s  skip (session) i  ignore Ndays     f      ignore forever
       z  mark resolved (until next inbound) u      unresolve (clear marker)
-      r  reply (send/copy/both)            t      tapback reaction (emoji)
+      r  reply (send/copy/both)            t      tapback reaction (pick #)
       g  LLM draft (accept/edit/copy/both) a      alias name (persist)
       o  open in Messages                  R      refresh threads from DB
       c  clear ignore on this thread       h      help
@@ -887,7 +889,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             print("n: next | p: previous | j 5: jump to #5 | s: skip (session only)")
             print("i: ignore for N days | f: ignore forever | c: clear ignore for this thread")
             print("z: mark resolved (hide until a NEW incoming) | u: clear resolved marker")
-            print("r: reply (send/copy/both, with inline or $EDITOR) | t: tapback reaction (emoji) | g: LLM draft (accept/edit/copy/both) | o: open in Messages")
+            print("r: reply (send/copy/both, with inline or $EDITOR) | t: tapback reaction (pick #) | g: LLM draft (accept/edit/copy/both) | o: open in Messages")
             print("a: alias a participant handle to a custom name (persisted)")
             print("R: refresh threads from DB with current filters | q: quit")
 
@@ -1055,10 +1057,14 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
                 print("Canceled.")
                 continue
             target = msgs[int(pick) - 1]
-            emoji = prompt("Emoji: ").strip()
-            if not emoji:
-                print("No emoji; canceled.")
+            print("Pick tapback:")
+            for i, tb in enumerate(COMMON_TAPBACKS, 1):
+                print(f"{i}. {tb}")
+            epick = prompt("Tapback #: ").strip()
+            if not epick.isdigit() or not (1 <= int(epick) <= len(COMMON_TAPBACKS)):
+                print("Canceled.")
                 continue
+            emoji = COMMON_TAPBACKS[int(epick) - 1]
             ok, detail = tapback_via_messages(t.guid, target["guid"], emoji, timeout=applescript_timeout)
             print(f"{emoji} " + ("Reacted." if ok else f"Not reacted: {detail}"))
             if ok:
