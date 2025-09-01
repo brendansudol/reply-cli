@@ -21,8 +21,6 @@ STATE_DEFAULT = os.path.expanduser("~/.reply_state.json")
 LEGACY_STATE = os.path.expanduser("~/.imreply_state.json")
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
-COMMON_TAPBACKS = ["❤️", "👍", "👎", "😂", "!!", "?"]
-
 FULL_HELP = textwrap.dedent("""
     reply — interactive iMessage/SMS triage CLI for macOS
     =====================================================
@@ -30,7 +28,7 @@ FULL_HELP = textwrap.dedent("""
     Overview
     --------
     Rank and triage threads that likely need a response, see recent context,
-    reply from the terminal (or copy to clipboard), react with emoji tapbacks,
+    reply from the terminal (or copy to clipboard),
     mark resolved until next inbound, ignore temporarily/forever, refresh without restarting,
     generate OpenAI-assisted drafts, resolve names from Contacts, and set your own
     persistent aliases for handles.
@@ -75,9 +73,8 @@ FULL_HELP = textwrap.dedent("""
       n  next           p  previous         j <#>  jump to item #
       s  skip (session) i  ignore Ndays     f      ignore forever
       z  mark resolved (until next inbound) u      unresolve (clear marker)
-      r  reply (send/copy/both)            t      tapback reaction (pick #)
-      g  LLM draft (accept/edit/copy/both) a      alias name (persist)
-      o  open in Messages                  d      delete conversation
+      r  reply (send/copy/both)            g      LLM draft (accept/edit/copy/both)
+      a  alias name (persist)              o      open in Messages
       R  refresh threads from DB           c      clear ignore on this thread
       h  help                              q      quit (saves position & GUID; use --resume to start there next time)
 
@@ -521,52 +518,6 @@ def send_via_messages(chat_guid: str, text: str, timeout: int = 20) -> Tuple[boo
         return False, out
     return False, (err or out or f"osascript exited with code {res.returncode}.")
 
-def tapback_via_messages(chat_guid: str, message_guid: str, emoji: str, timeout: int = 20) -> Tuple[bool, str]:
-    key_map = {
-        "❤️": "1",
-        "👍": "2",
-        "👎": "3",
-        "😂": "4",
-        "!!": "5",
-        "?": "6",
-    }
-    reaction_key = key_map.get(emoji)
-    if not reaction_key:
-        return False, "Unsupported tapback."
-    osa = f"""
-    on run argv
-      set chatID to item 1 of argv
-      set msgID to item 2 of argv
-      tell application "Messages"
-        if it is not running then launch
-        set theChat to chat id chatID
-        set theMsg to message id msgID of theChat
-        show theMsg
-      end tell
-      delay 0.15
-      tell application "System Events"
-        if not (exists process "Messages") then error "Messages is not running"
-        tell process "Messages"
-          keystroke "t" using {{command down}}
-          delay 0.05
-          keystroke "{reaction_key}"
-        end tell
-      end tell
-      return "OK"
-    end run
-    """
-    try:
-        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid, message_guid], capture_output=True, text=True, timeout=timeout)
-    except FileNotFoundError:
-        return False, "osascript not found (must run on macOS)."
-    except subprocess.TimeoutExpired:
-        return False, "Timed out asking Messages to react."
-    out = (res.stdout or "").strip()
-    err = (res.stderr or "").strip()
-    if res.returncode != 0 or out.startswith("ERR:"):
-        return False, err or out or f"osascript exit {res.returncode}"
-    return True, "OK"
-
 def copy_to_clipboard(text: str) -> Tuple[bool, str]:
     try:
         res = subprocess.run(["pbcopy"], input=text, text=True, capture_output=True)
@@ -824,36 +775,6 @@ def open_in_messages(chat_guid: str) -> Tuple[bool, str]:
         return True, "Opened."
     return False, out
 
-def delete_chat(chat_guid: str, timeout: int = 20) -> Tuple[bool, str]:
-    osa = """
-    on run argv
-      set chatID to item 1 of argv
-      tell application "Messages"
-        if it is not running then launch
-        try
-          set theChat to chat id chatID
-          delete theChat
-          return "OK"
-        on error errMsg number errNum
-          return "ERR: " & errNum & " " & errMsg
-        end try
-      end tell
-    end run
-    """
-    try:
-        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid], capture_output=True, text=True, timeout=timeout)
-    except FileNotFoundError:
-        return False, "osascript not found (must run on macOS)."
-    except subprocess.TimeoutExpired:
-        return False, "Timed out asking Messages to delete."
-    out = (res.stdout or "").strip()
-    err = (res.stderr or "").strip()
-    if res.returncode == 0 and out == "OK":
-        return True, "Deleted."
-    if out.startswith("ERR:"):
-        return False, out
-    return False, err or out or f"osascript exited with code {res.returncode}."
-
 def read_multiline_from_editor(initial_text: str = "") -> Optional[str]:
     editor = os.environ.get("EDITOR") or "nano"
     with tempfile.NamedTemporaryFile(prefix="reply_", suffix=".txt", delete=False) as tf:
@@ -920,7 +841,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             continue
 
         render_thread(idx, len(active), t, resolver, conn, context_n, no_truncate=no_truncate)
-        print("\nCommands: [n]ext  [p]rev  [j]ump#  [s]kip  [i]gnore Ndays  [f]orever  [z] resolve  [u]nresolve  [r]eply  [t]apback  [g]enerate  [a]lias  [o]pen  [d]elete  [R]efresh  [c]lear ignore  [h]elp  [q]uit")
+        print("\nCommands: [n]ext  [p]rev  [j]ump#  [s]kip  [i]gnore Ndays  [f]orever  [z] resolve  [u]nresolve  [r]eply  [g]enerate  [a]lias  [o]pen  [R]efresh  [c]lear ignore  [h]elp  [q]uit")
         cmd = prompt("> ").strip()
 
         if cmd == "q":
@@ -932,8 +853,8 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             print("n: next | p: previous | j 5: jump to #5 | s: skip (session only)")
             print("i: ignore for N days | f: ignore forever | c: clear ignore for this thread")
             print("z: mark resolved (hide until a NEW incoming) | u: clear resolved marker")
-            print("r: reply (send/copy/both, with inline or $EDITOR) | t: tapback reaction (pick #)")
-            print("g: LLM draft (accept/edit/copy/both) | o: open in Messages | d: delete conversation")
+            print("r: reply (send/copy/both, with inline or $EDITOR)")
+            print("g: LLM draft (accept/edit/copy/both) | o: open in Messages")
             print("a: alias a participant handle to a custom name (persisted)")
             print("R: refresh threads from DB with current filters | q: quit")
 
@@ -1006,22 +927,6 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
         elif cmd == "o":
             ok, detail = open_in_messages(t.guid)
             print(detail)
-
-        elif cmd == "d":
-            ans = prompt("Delete this conversation from Messages? [y/N] ").strip().lower()
-            if ans == "y":
-                ok, detail = delete_chat(t.guid, timeout=applescript_timeout)
-                print(detail)
-                if ok:
-                    st["history"].append({"t": now_utc().isoformat(), "guid": t.guid, "action": "delete"})
-                    save_state(st, state_path)
-                    active = [x for x in active if x.guid != t.guid]
-                    if not active:
-                        print("No more threads.")
-                        break
-                    if idx >= len(active): idx = len(active) - 1
-            else:
-                print("Canceled.")
 
         elif cmd == "a":
             parts = t.participants
@@ -1104,31 +1009,6 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
                 did_send = ok
             if did_send or did_copy:
                 st["history"].append({"t": now_utc().isoformat(), "guid": t.guid, "action": "reply", "sent": did_send, "copied": did_copy, "chars": len(msg)})
-                save_state(st, state_path)
-                idx = find_next(idx, +1)
-
-        elif cmd == "t":
-            msgs = fetch_last_messages(conn, t.chat_id, max(12, context_n or 6))
-            lines = format_context(msgs, resolver, no_truncate=no_truncate)
-            for i, line in enumerate(lines, 1):
-                print(f"{i:2d}. {line.strip()}")
-            pick = prompt("React to which message #? ").strip()
-            if not pick.isdigit() or not (1 <= int(pick) <= len(msgs)):
-                print("Canceled.")
-                continue
-            target = msgs[int(pick) - 1]
-            print("Pick tapback:")
-            for i, tb in enumerate(COMMON_TAPBACKS, 1):
-                print(f"{i}. {tb}")
-            epick = prompt("Tapback #: ").strip()
-            if not epick.isdigit() or not (1 <= int(epick) <= len(COMMON_TAPBACKS)):
-                print("Canceled.")
-                continue
-            emoji = COMMON_TAPBACKS[int(epick) - 1]
-            ok, detail = tapback_via_messages(t.guid, target["guid"], emoji, timeout=applescript_timeout)
-            print(f"{emoji} " + ("Reacted." if ok else f"Not reacted: {detail}"))
-            if ok:
-                st["history"].append({"t": now_utc().isoformat(), "guid": t.guid, "action": "tapback", "emoji": emoji, "msg_guid": target["guid"]})
                 save_state(st, state_path)
                 idx = find_next(idx, +1)
 
@@ -1275,7 +1155,7 @@ def main():
         sys.exit(0)
 
     ap = argparse.ArgumentParser(
-        description="Interactive iMessage/SMS triage CLI for macOS: triage; mark resolved; ignore; reply; tapback; LLM; refresh; no-truncate; resume; aliases; copy replies.",
+        description="Interactive iMessage/SMS triage CLI for macOS: triage; mark resolved; ignore; reply; LLM; refresh; no-truncate; resume; aliases; copy replies.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Tip: run `python3 reply.py --help-full` or `python3 reply.py help` to see the full guide."
     )
