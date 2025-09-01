@@ -117,6 +117,9 @@ FULL_HELP = textwrap.dedent("""
 # ---------------------- Utilities ----------------------
 
 def apple_time_to_dt(apple_time: Optional[int]) -> Optional[datetime]:
+    # Convert Apple's chat.db time (seconds or nanoseconds since 2001-01-01 UTC)
+    # to a timezone-aware datetime. Apple has used different units across macOS versions,
+    # so we detect nanoseconds by threshold and divide accordingly.
     if apple_time is None:
         return None
     try:
@@ -132,6 +135,8 @@ def apple_time_to_dt(apple_time: Optional[int]) -> Optional[datetime]:
     return APPLE_EPOCH + delta
 
 def human_timedelta(dt: Optional[datetime]) -> str:
+    # Compact, human-friendly elapsed time for UI (s, m, h, d).
+    # Keeps the display small for terminal output and scoring context.
     if dt is None:
         return "unknown"
     now = datetime.now(timezone.utc)
@@ -177,6 +182,8 @@ class ThreadInfo:
 # ---------------------- DB ----------------------
 
 def open_ro(db_path: str) -> sqlite3.Connection:
+    # Open SQLite DB strictly read-only via URI. This avoids accidental writes
+    # and lets us read while Messages app is active (WAL mode is fine).
     uri = f"file:{db_path}?mode=ro"
     return sqlite3.connect(uri, uri=True)
 
@@ -194,6 +201,10 @@ def list_participants(conn: sqlite3.Connection, chat_id: int) -> List[str]:
     return [row[0] for row in cur.fetchall()]
 
 def get_threads_core(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    # Build per-chat aggregates via CTEs:
+    # - msgs: flatten chat-message joins
+    # - per_chat: last incoming/outgoing/any message timestamps by chat
+    # - last_in_msg: the latest incoming message text per chat (for preview)
     cur = conn.execute(
         """
         WITH msgs AS (
@@ -243,6 +254,9 @@ def get_threads_core(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 def count_consecutive_incoming(conn: sqlite3.Connection, chat_id: int, last_outgoing_date: Optional[int]) -> int:
+    # Count how many consecutive incoming messages there are AFTER the last outgoing
+    # message from me, scanning newest → oldest until we hit my message. This helps
+    # prioritize threads where the other person has pinged multiple times.
     pivot = 0 if last_outgoing_date is None else int(last_outgoing_date)
     cur = conn.execute(
         """
@@ -270,6 +284,8 @@ def compute_score(last_incoming_dt, last_outgoing_dt, last_message_dt, consecuti
 
     If you have replied since the last incoming (including with a reaction), the score is 0.
     """
+    # Rationale: keep scoring intuitive. Urgency dominates (0.75), streak nudges (0.25).
+    # Urgency uses an ~8h half-life: newer last incoming rises to the top.
     # If there is no incoming at all, nothing to prioritize.
     if last_incoming_dt is None:
         return 0.0
@@ -286,6 +302,10 @@ def compute_score(last_incoming_dt, last_outgoing_dt, last_message_dt, consecuti
     return round(score, 4)
 
 def build_threads(conn: sqlite3.Connection, within_days: int, include_groups: bool) -> List[ThreadInfo]:
+    # Assemble ThreadInfo objects from DB rows and computed fields, enforcing filters:
+    # - within_days: only show recently active threads
+    # - include_groups: default to 1:1 chats unless requested
+    # - needs_reply: last incoming is newer than last outgoing
     raw = get_threads_core(conn)
     now = now_utc()
     cutoff = now - timedelta(days=within_days) if within_days > 0 else None
@@ -303,6 +323,8 @@ def build_threads(conn: sqlite3.Connection, within_days: int, include_groups: bo
             continue
         if not include_groups and len(parts) > 1:
             continue
+        # needs_reply is derived from ordering of last incoming vs last outgoing
+        # (reactions are recorded as outgoing and count as replies)
         needs = bool(last_in_dt and (last_out_dt is None or last_in_dt > last_out_dt))
         streak = count_consecutive_incoming(conn, chat_id, row["last_outgoing"])
         score = compute_score(last_in_dt, last_out_dt, last_msg_dt, streak)
@@ -320,10 +342,13 @@ def build_threads(conn: sqlite3.Connection, within_days: int, include_groups: bo
             needs_reply=needs,
             score=score,
         ))
+    # Sort: all needs-reply threads first, then by descending score, then by recency.
     threads.sort(key=lambda t: (not t.needs_reply, -t.score, t.last_message_dt or APPLE_EPOCH))
     return threads
 
 def fetch_last_messages(conn: sqlite3.Connection, chat_id: int, limit: int) -> List[dict]:
+    # Fetch latest N messages in reverse-chronological order, then reverse at the end
+    # so callers can render oldest → newest. We capture assoc_type to tag reactions.
     cur = conn.execute(
         """
         SELECT m.ROWID, m.guid, m.is_from_me, m.date, m.text, m.cache_has_attachments,
@@ -373,6 +398,8 @@ def key_for_identifier(identifier: Optional[str]) -> Optional[str]:
 
 class NameResolver:
     def __init__(self, enabled: bool = False, timeout: int = 12, overrides: Optional[Dict[str,str]] = None):
+        # Two-level resolution: user overrides (always win) and optionally Contacts.app.
+        # For phone numbers, we also index by last 7 digits to tolerate formatting and country codes.
         self.enabled = enabled
         self.timeout = timeout
         self.by_email: Dict[str, str] = {}
@@ -386,6 +413,8 @@ class NameResolver:
                 self.enabled = False
 
     def _load_contacts(self):
+        # Dump names, emails, and phones from Contacts via AppleScript in one shot.
+        # We parse a tab-separated result to avoid multiple AppleScript round-trips.
         osa = """
         on joinList(L, sep)
           set {T, text item delimiters} to {text item delimiters, sep}
@@ -438,9 +467,12 @@ class NameResolver:
                     continue
                 self.by_digits[d] = name
                 if len(d) >= 7:
+                    # 7-digit suffix mapping: tolerate country codes/prefixes
                     self.by_digits[d[-7:]] = name
 
     def override_lookup(self, identifier: Optional[str]) -> Optional[str]:
+        # Match overrides by normalized key. Support country-code variants and
+        # 7-digit suffix to best-effort map a dialed number to an override.
         k = key_for_identifier(identifier)
         if not k:
             return None
@@ -461,6 +493,8 @@ class NameResolver:
         self.user_overrides[k] = name
 
     def resolve(self, identifier: Optional[str]) -> Optional[str]:
+        # Resolve in order: overrides > Contacts by email > Contacts by phone digits.
+        # Phone lookups fall back to digit-only and suffix matching to tolerate formats.
         ov = self.override_lookup(identifier)
         if ov:
             return ov
@@ -488,6 +522,8 @@ class NameResolver:
 # ---------------------- Messaging & Clipboard ----------------------
 
 def send_via_messages(chat_guid: str, text: str, timeout: int = 20) -> Tuple[bool, str]:
+    # Send by telling the Messages app to send to a chat id (GUID). We pass values
+    # via osascript argv to avoid quoting issues and let AppleScript do the rest.
     osa = """
     on run argv
       set chatID to item 1 of argv
@@ -519,6 +555,7 @@ def send_via_messages(chat_guid: str, text: str, timeout: int = 20) -> Tuple[boo
     return False, (err or out or f"osascript exited with code {res.returncode}.")
 
 def copy_to_clipboard(text: str) -> Tuple[bool, str]:
+    # Simple wrapper around pbcopy (macOS). Returns (ok, message) for user feedback.
     try:
         res = subprocess.run(["pbcopy"], input=text, text=True, capture_output=True)
     except FileNotFoundError:
@@ -530,6 +567,8 @@ def copy_to_clipboard(text: str) -> Tuple[bool, str]:
 # ---------------------- LLM draft (OpenAI only) ----------------------
 
 def call_openai(messages: List[Dict[str, str]], model: str, api_key: Optional[str]) -> str:
+    # Minimal dependency HTTP call to OpenAI's Chat Completions API using urllib.
+    # This path keeps the tool stdlib-only; drafting is optional and opt-in via env.
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
     url = "https://api.openai.com/v1/chat/completions"
@@ -555,6 +594,8 @@ def call_openai(messages: List[Dict[str, str]], model: str, api_key: Optional[st
         raise RuntimeError("Unexpected OpenAI response format")
 
 def llm_draft_reply(context_msgs: List[dict], notes: str, my_name_hint: Optional[str], model: str) -> str:
+    # Build a short prompt from the last few messages plus optional notes, asking
+    # for a concise reply. We trim to the last ~12 messages to bound token usage.
     api_key = os.environ.get("OPENAI_API_KEY")
     sys_prompt = (
         "You're helping craft a short, clear SMS/iMessage reply in the user's tone.\n"
@@ -582,6 +623,8 @@ def llm_draft_reply(context_msgs: List[dict], notes: str, my_name_hint: Optional
 # ---------------------- State ----------------------
 
 def load_state(path: str) -> Dict[str, Any]:
+    # Load persisted UI state (ignores, resolved markers, aliases, etc.).
+    # If the new default path is missing, fall back to a legacy location once.
     p = os.path.expanduser(path)
     # Legacy fallback only when using default state path
     if not os.path.exists(p) and os.path.abspath(p) == os.path.abspath(STATE_DEFAULT) and os.path.exists(LEGACY_STATE):
@@ -604,6 +647,7 @@ def load_state(path: str) -> Dict[str, Any]:
         return {"ignored_forever": [], "ignored_until": {}, "resolved_until": {}, "drafts": {}, "history": [], "position": 0, "last_guid": None, "overrides": {}}
 
 def save_state(st: Dict[str, Any], path: str):
+    # Atomic write: write to a temp file and replace to avoid truncation on crash.
     p = os.path.expanduser(path)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
@@ -625,6 +669,8 @@ def is_ignored(guid: str, st: Dict[str, Any]) -> bool:
 
 def is_resolved_for_now(thread: ThreadInfo, st: Dict[str, Any]) -> bool:
     """Return True if the thread was marked resolved and has NO newer incoming since then."""
+    # We hide a thread only while the last incoming timestamp is <= the saved
+    # resolved marker. As soon as a new incoming arrives, it reappears.
     ru_str = st.get("resolved_until", {}).get(thread.guid)
     if not ru_str:
         return False
@@ -689,6 +735,8 @@ def clear_resolved(guid: str, st: Dict[str, Any], state_path: str):
 # ---------------------- Presentation ----------------------
 
 def build_display_name(thread: ThreadInfo, resolver: 'NameResolver') -> Tuple[str, str]:
+    # Prefer the chat's display_name. Otherwise resolve per-participant names (with
+    # overrides/Contacts) and build a short participant summary for the header.
     parts = thread.participants
     if thread.display_name:
         name = thread.display_name
@@ -710,6 +758,8 @@ def build_display_name(thread: ThreadInfo, resolver: 'NameResolver') -> Tuple[st
     return name, part_str
 
 def format_context(msgs: List[dict], resolver: 'NameResolver', no_truncate: bool = False) -> List[str]:
+    # Render a fixed-width context view, labeling non-text messages and reactions,
+    # and truncating long lines unless --no-truncate is set.
     out = []
     for m in msgs:
         ts = human_timedelta(m["when"])
@@ -728,6 +778,8 @@ def format_context(msgs: List[dict], resolver: 'NameResolver', no_truncate: bool
     return out
 
 def render_thread(idx: int, total: int, t: ThreadInfo, resolver: 'NameResolver', conn: sqlite3.Connection, context_n: int, no_truncate: bool):
+    # Print a single thread's header plus optional context block. The preview shows
+    # the last incoming text (truncated) to orient you quickly before deciding.
     name, parts_short = build_display_name(t, resolver)
     last_r = human_timedelta(t.last_message_dt)
     last_in = human_timedelta(t.last_incoming_dt)
@@ -751,6 +803,8 @@ def render_thread(idx: int, total: int, t: ThreadInfo, resolver: 'NameResolver',
                 print(line)
 
 def open_in_messages(chat_guid: str) -> Tuple[bool, str]:
+    # Bring the chat to the foreground in Messages. Useful for context beyond the
+    # terminal or for sending media that AppleScript from CLI can't handle.
     osa = """
     on run argv
       set chatID to item 1 of argv
@@ -776,6 +830,8 @@ def open_in_messages(chat_guid: str) -> Tuple[bool, str]:
     return False, out
 
 def read_multiline_from_editor(initial_text: str = "") -> Optional[str]:
+    # Allow composing multi-line replies by opening $EDITOR (defaults to nano).
+    # Temp file content is captured after the editor exits, then removed.
     editor = os.environ.get("EDITOR") or "nano"
     with tempfile.NamedTemporaryFile(prefix="reply_", suffix=".txt", delete=False) as tf:
         path = tf.name
@@ -794,6 +850,8 @@ def read_multiline_from_editor(initial_text: str = "") -> Optional[str]:
 # ---------------------- Interactive loop ----------------------
 
 def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolver: NameResolver, st: Dict[str, Any], state_path: str, context_n: int, llm_model: str, applescript_timeout: int, within_days: int, include_groups: bool, limit: int, no_truncate: bool, resume: bool):
+    # Event-driven terminal UI. We keep an "active" list filtered by ignore/resolved
+    # state, track a session-only skip set, and mutate state (JSON) on actions.
     def build_active(ths: List[ThreadInfo]) -> List[ThreadInfo]:
         return [t for t in ths if not is_ignored(t.guid, st) and not is_resolved_for_now(t, st)]
 
@@ -804,6 +862,8 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
 
     idx = 0
     if resume:
+        # Resume at last GUID if available, otherwise saved index. This mirrors
+        # how --resume works across runs.
         last_guid = st.get("last_guid")
         if last_guid:
             for i, tt in enumerate(active):
@@ -875,6 +935,8 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             idx = find_next(idx, -1)
 
         elif cmd == "R":
+            # Refresh from DB with current filters; try to keep position on same GUID
+            # if the thread still exists in the refreshed set.
             cur_guid = active[idx].guid if active else None
             new_threads = build_threads(conn, within_days=within_days, include_groups=include_groups)
             if limit and limit > 0:
@@ -897,6 +959,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             idx = find_next(idx, +1)
 
         elif cmd.startswith("i"):
+            # Ignore this thread temporarily (persisted with an until timestamp).
             parts = cmd.split()
             if len(parts) == 2 and parts[1].isdigit():
                 days = int(parts[1])
@@ -912,6 +975,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             if idx >= len(active): idx = len(active) - 1
 
         elif cmd == "f":
+            # Ignore forever (can be cleared later with 'c').
             set_ignore_forever(t.guid, st, state_path)
             print("Ignored forever.")
             active = [x for x in active if x.guid != t.guid]
@@ -929,6 +993,8 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             print(detail)
 
         elif cmd == "a":
+            # Add or update an alias for a participant handle. Aliases override
+            # Contacts and apply immediately to rendering.
             parts = t.participants
             if not parts:
                 print("No participants found to alias.")
@@ -986,6 +1052,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             print("Cleared resolved marker for this thread.")
 
         elif cmd == "r":
+            # Inline compose; open $EDITOR if empty. User chooses send/copy/both.
             msg = prompt("Reply text (leave empty to open $EDITOR): ")
             if not msg:
                 msg = read_multiline_from_editor("")
@@ -1013,6 +1080,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
                 idx = find_next(idx, +1)
 
         elif cmd == "g":
+            # Generate a short LLM draft from recent context plus optional notes.
             notes = prompt("Notes/guidance for LLM (optional): ")
             try:
                 ctx = fetch_last_messages(conn, t.chat_id, max(12, context_n or 6))
@@ -1079,6 +1147,8 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
 # ---------------------- Non-interactive listing ----------------------
 
 def print_threads(conn: sqlite3.Connection, threads: List[ThreadInfo], limit: int, context_n: int, resolver: NameResolver, no_truncate: bool, st: Dict[str, Any]):
+    # Non-interactive listing used for previews and exports. Applies ignore/resolved
+    # filters and optionally prints a compact context block per thread.
     # Filter out ignored/resolved
     filtered = [t for t in threads if not is_ignored(t.guid, st) and not is_resolved_for_now(t, st)]
     shown = filtered[:limit] if limit else filtered
@@ -1112,6 +1182,8 @@ def print_threads(conn: sqlite3.Connection, threads: List[ThreadInfo], limit: in
         print("-" * 100)
 
 def export_threads(threads: List[ThreadInfo], path: str, resolver: NameResolver):
+    # Write a flat JSON/CSV export of scored threads for analysis. Includes both
+    # raw DB-derived fields and a resolved display name for convenience.
     ext = os.path.splitext(path)[1].lower()
     rows = []
     for t in threads:
@@ -1183,6 +1255,8 @@ def main():
     args = ap.parse_args()
 
     if args.help_full:
+        # Mirror `help` but as a flag, so users can run `--help-full` anywhere
+        # in the argument order.
         print(FULL_HELP)
         sys.exit(0)
 
@@ -1209,6 +1283,7 @@ def main():
             threads = threads[: args.limit]
 
         if args.export:
+            # In export mode, also print the list to terminal for immediate visibility.
             print_threads(conn, threads, limit=len(threads), context_n=args.context, resolver=resolver, no_truncate=args.no_truncate, st=st)
             export_threads(threads, os.path.expanduser(args.export), resolver)
             return
