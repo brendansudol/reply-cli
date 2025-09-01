@@ -77,9 +77,9 @@ FULL_HELP = textwrap.dedent("""
       z  mark resolved (until next inbound) u      unresolve (clear marker)
       r  reply (send/copy/both)            t      tapback reaction (pick #)
       g  LLM draft (accept/edit/copy/both) a      alias name (persist)
-      o  open in Messages                  R      refresh threads from DB
-      c  clear ignore on this thread       h      help
-      q  quit (saves position & GUID; use --resume to start there next time)
+      o  open in Messages                  d      delete conversation
+      R  refresh threads from DB           c      clear ignore on this thread
+      h  help                              q      quit (saves position & GUID; use --resume to start there next time)
 
     OpenAI drafting (optional)
     --------------------------
@@ -824,6 +824,36 @@ def open_in_messages(chat_guid: str) -> Tuple[bool, str]:
         return True, "Opened."
     return False, out
 
+def delete_chat(chat_guid: str, timeout: int = 20) -> Tuple[bool, str]:
+    osa = """
+    on run argv
+      set chatID to item 1 of argv
+      tell application "Messages"
+        if it is not running then launch
+        try
+          set theChat to chat id chatID
+          delete theChat
+          return "OK"
+        on error errMsg number errNum
+          return "ERR: " & errNum & " " & errMsg
+        end try
+      end tell
+    end run
+    """
+    try:
+        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid], capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return False, "osascript not found (must run on macOS)."
+    except subprocess.TimeoutExpired:
+        return False, "Timed out asking Messages to delete."
+    out = (res.stdout or "").strip()
+    err = (res.stderr or "").strip()
+    if res.returncode == 0 and out == "OK":
+        return True, "Deleted."
+    if out.startswith("ERR:"):
+        return False, out
+    return False, err or out or f"osascript exited with code {res.returncode}."
+
 def read_multiline_from_editor(initial_text: str = "") -> Optional[str]:
     editor = os.environ.get("EDITOR") or "nano"
     with tempfile.NamedTemporaryFile(prefix="reply_", suffix=".txt", delete=False) as tf:
@@ -890,7 +920,7 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             continue
 
         render_thread(idx, len(active), t, resolver, conn, context_n, no_truncate=no_truncate)
-        print("\nCommands: [n]ext  [p]rev  [j]ump#  [s]kip  [i]gnore Ndays  [f]orever  [z] resolve  [u]nresolve  [r]eply  [t]apback  [g]enerate  [a]lias  [o]pen  [R]efresh  [c]lear ignore  [h]elp  [q]uit")
+        print("\nCommands: [n]ext  [p]rev  [j]ump#  [s]kip  [i]gnore Ndays  [f]orever  [z] resolve  [u]nresolve  [r]eply  [t]apback  [g]enerate  [a]lias  [o]pen  [d]elete  [R]efresh  [c]lear ignore  [h]elp  [q]uit")
         cmd = prompt("> ").strip()
 
         if cmd == "q":
@@ -902,7 +932,8 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
             print("n: next | p: previous | j 5: jump to #5 | s: skip (session only)")
             print("i: ignore for N days | f: ignore forever | c: clear ignore for this thread")
             print("z: mark resolved (hide until a NEW incoming) | u: clear resolved marker")
-            print("r: reply (send/copy/both, with inline or $EDITOR) | t: tapback reaction (pick #) | g: LLM draft (accept/edit/copy/both) | o: open in Messages")
+            print("r: reply (send/copy/both, with inline or $EDITOR) | t: tapback reaction (pick #)")
+            print("g: LLM draft (accept/edit/copy/both) | o: open in Messages | d: delete conversation")
             print("a: alias a participant handle to a custom name (persisted)")
             print("R: refresh threads from DB with current filters | q: quit")
 
@@ -975,6 +1006,22 @@ def interactive_loop(threads: List[ThreadInfo], conn: sqlite3.Connection, resolv
         elif cmd == "o":
             ok, detail = open_in_messages(t.guid)
             print(detail)
+
+        elif cmd == "d":
+            ans = prompt("Delete this conversation from Messages? [y/N] ").strip().lower()
+            if ans == "y":
+                ok, detail = delete_chat(t.guid, timeout=applescript_timeout)
+                print(detail)
+                if ok:
+                    st["history"].append({"t": now_utc().isoformat(), "guid": t.guid, "action": "delete"})
+                    save_state(st, state_path)
+                    active = [x for x in active if x.guid != t.guid]
+                    if not active:
+                        print("No more threads.")
+                        break
+                    if idx >= len(active): idx = len(active) - 1
+            else:
+                print("Canceled.")
 
         elif cmd == "a":
             parts = t.participants
