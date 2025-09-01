@@ -522,37 +522,50 @@ def send_via_messages(chat_guid: str, text: str, timeout: int = 20) -> Tuple[boo
     return False, (err or out or f"osascript exited with code {res.returncode}.")
 
 def tapback_via_messages(chat_guid: str, message_guid: str, emoji: str, timeout: int = 20) -> Tuple[bool, str]:
-    osa = """
+    key_map = {
+        "❤️": "1",
+        "👍": "2",
+        "👎": "3",
+        "😂": "4",
+        "!!": "5",
+        "?": "6",
+    }
+    reaction_key = key_map.get(emoji)
+    if not reaction_key:
+        return False, "Unsupported tapback."
+    osa = f"""
     on run argv
       set chatID to item 1 of argv
       set msgID to item 2 of argv
-      set tbEmoji to item 3 of argv
       tell application "Messages"
         if it is not running then launch
-        try
-          set theChat to chat id chatID
-          set theMsg to message id msgID of theChat
-          set tapback of theMsg to tbEmoji
-          return "OK"
-        on error errMsg number errNum
-          return "ERR: " & errNum & " " & errMsg
-        end try
+        set theChat to chat id chatID
+        set theMsg to message id msgID of theChat
+        show theMsg
       end tell
+      delay 0.15
+      tell application "System Events"
+        if not (exists process "Messages") then error "Messages is not running"
+        tell process "Messages"
+          keystroke "t" using command down
+          delay 0.05
+          keystroke "{reaction_key}"
+        end tell
+      end tell
+      return "OK"
     end run
     """
     try:
-        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid, message_guid, emoji], capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(["osascript", "-e", osa, "--", chat_guid, message_guid], capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         return False, "osascript not found (must run on macOS)."
     except subprocess.TimeoutExpired:
         return False, "Timed out asking Messages to react."
     out = (res.stdout or "").strip()
     err = (res.stderr or "").strip()
-    if res.returncode == 0 and out == "OK":
-        return True, "Reacted."
-    if out.startswith("ERR:"):
-        return False, out
-    return False, (err or out or f"osascript exited with code {res.returncode}.")
+    if res.returncode != 0 or out.startswith("ERR:"):
+        return False, err or out or f"osascript exit {res.returncode}"
+    return True, "OK"
 
 def copy_to_clipboard(text: str) -> Tuple[bool, str]:
     try:
